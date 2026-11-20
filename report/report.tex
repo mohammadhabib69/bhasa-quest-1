@@ -135,7 +135,7 @@ which a level-2 meta-learner consumes.}
 All models are evaluated with five-fold stratified cross-validation on the training set. Because the
 level-2 learner is fitted on level-1 out-of-fold predictions, its own score is reported under a
 \emph{nested} five-fold split with a different random seed, so that the meta-model never sees the
-rows it is scored on. Submissions were selected on nested OOF macro-$F_1$; twelve speculative
+rows it is scored on. Submissions were selected on nested OOF macro-$F_1$; several speculative
 candidates were never submitted because they failed to clear a $+0.0015$ improvement threshold.
 
 \section{Results}\label{sec:results}

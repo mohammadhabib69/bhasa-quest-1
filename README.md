@@ -134,7 +134,7 @@ python src/local/local_blend.py      # nested-CV stack + candidate submissions
 ```
 
 `local_blend.py` refuses to write a submission unless the nested OOF improves by more than
-0.0015 — the guard that stopped twelve speculative submissions from being spent.
+0.0015 — the guard that kept speculative candidates off the submission quota.
 
 ---
 
