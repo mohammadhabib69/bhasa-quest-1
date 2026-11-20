@@ -1,0 +1,22 @@
+# competition data — never redistribute
+train.csv
+test.csv
+sample_submission.csv
+*.csv
+!.gitignore
+
+# saved probability matrices (regenerate by running the pipeline)
+*.npy
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.ipynb_checkpoints/
+
+# latex build artefacts
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz

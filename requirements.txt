@@ -1,0 +1,20 @@
+# Core
+numpy>=1.26
+pandas>=2.0
+scipy>=1.10
+scikit-learn>=1.3
+
+# Level-2 meta-model
+lightgbm>=4.0
+
+# Level-1b encoders (GPU strongly recommended)
+torch>=2.1
+transformers>=4.40
+sentencepiece>=0.1.99
+
+# Transliteration + normalisation for the BanglaBERT track
+avro.py
+csebuetnlp-normalizer
+
+# Figures
+matplotlib>=3.8
