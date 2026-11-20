@@ -25,27 +25,27 @@ import os, re, time, math
 import numpy as np, pandas as pd
 
 # ----------------------------- config -----------------------------
-# v6 = ৩টি ভিন্ন transformer (diversity) + TF-IDF stacker
-# কেন: v4/v5-এ শুধু ১টি transformer ছিল (BanglaBERT, solo 0.7231)। Ensemble-এ diversity
-# বাড়ানোই টেক্সট ক্লাসিফিকেশনে সবচেয়ে নির্ভরযোগ্য লাভের পথ।
+# v6 = three distinct transformers (diversity) + TF-IDF stacker
+# Why: v4/v5 carried only one transformer (BanglaBERT, solo 0.7231). Raising diversity
+# is the most reliable source of gain in text classification.
 #   track 1: csebuetnlp/banglabert   -> transliterated Bangla script (proven, 0.7231)
-#   track 2: google/muril-base-cased -> ROMANIZED টেক্সট সরাসরি (নতুন)
-#            MuRIL transliterated data দিয়ে pretrain করা; PANX bn_tr-এ F1 72.94 vs mBERT 41.77
-#   track 3: microsoft/mdeberta-v3-base -> ROMANIZED (নতুন)
-#            XNLI avg 79.8 vs XLM-R-base 76.2 — base-size-এ সবচেয়ে শক্তিশালী multilingual
-# BanglishBERT বাদ: v4/v5-এ blend weight ঠিক 0.00 ছিল।
+#   track 2: google/muril-base-cased -> ROMANIZED text directly (new)
+#            MuRIL is pretrained on transliterated data; PANX bn_tr F1 72.94 vs mBERT 41.77
+#   track 3: microsoft/mdeberta-v3-base -> ROMANIZED (new)
+#            XNLI avg 79.8 vs XLM-R-base 76.2 -- strongest base-size multilingual model
+# BanglishBERT dropped: its blend weight was exactly 0.00 in v4/v5.
 FAST_DEV_RUN = False
 RUN_BANGLISHBERT_TRACK = False
 RUN_BANGLABERT_TRACK = True     # track 1 (transliterated)
 RUN_MURIL_TRACK = True          # track 2 (romanized)
 RUN_MDEBERTA_TRACK = True       # track 3 (romanized)
 BB_SEEDS, BN_SEEDS, MURIL_SEEDS, MDEB_SEEDS = 2, 2, 2, 2
-# v7: per-model epoch। MuRIL-এর আসল রান প্রমাণ করেছে ৫ epoch যথেষ্ট নয় —
-# fold1-এ seed1 মাত্র 0.2805-এ আটকে ছিল, loss প্রতি epoch-এ কমছিল (1.3725→1.2219)।
-# ওটা স্পষ্ট underfitting, তাই MuRIL-কে ৮ epoch দেওয়া হলো।
+# v7: per-model epochs. MuRIL's first run proved 5 epochs is not enough --
+# in fold 1, seed 1 was stuck at 0.2805 while the loss kept falling (1.3725 -> 1.2219).
+# That is clear underfitting, so MuRIL is given 8 epochs.
 BN_EPOCHS, MURIL_EPOCHS, MDEB_EPOCHS = 5, 8, 6
 MAXLEN, EPOCHS, LR, BS = 256, 5, 3e-5, 32
-MDEB_BS = 16                    # mDeBERTa-v3-এর embedding ~190M param, তাই ছোট batch
+MDEB_BS = 16                    # mDeBERTa-v3 embeddings are ~190M params, so a smaller batch
 LABEL_SMOOTH = 0.05
 NSPLIT, SEED, N_CLASSES = 5, 42, 4
 np.random.seed(SEED)
@@ -75,9 +75,9 @@ if FAST_DEV_RUN:
     FOLDS = FOLDS[:2]
 print(f'using {len(FOLDS)} folds')
 
-# smoke test-এ শুধু ২ ফোল্ড চলে -> OOF-এর বাকি ৬০% row শূন্য থাকে।
-# ওই শূন্য row দিয়ে Level-2 ট্রেইন করলে স্কোর অর্থহীন হয়ে যায় (0.44 দেখাচ্ছিল)।
-# তাই coverage mask রাখি: শুধু ভ্যালিডেশন-এ আসা row-গুলোতেই সব মেট্রিক হিসাব হয়।
+# A smoke test runs only 2 folds, leaving 60% of the OOF rows at zero.
+# Training level-2 on those zero rows makes the score meaningless (it showed 0.44).
+# So we keep a coverage mask: every metric is computed only on rows that were filled.
 COVERED = np.zeros(len(y), dtype=bool)
 
 def f1p(P, yy=None, mask=None):
@@ -89,7 +89,7 @@ def f1p(P, yy=None, mask=None):
     return f1_score(y[mask], P[mask].argmax(1), average='macro')
 
 # ----------------------------- deps -----------------------------
-# mDeBERTa-v3-এর tokenizer sentencepiece/protobuf ছাড়া লোড হয় না
+# mDeBERTa-v3's tokenizer will not load without sentencepiece/protobuf
 for _pkg, _mod in [('sentencepiece', 'sentencepiece'), ('protobuf', 'google.protobuf')]:
     try:
         __import__(_mod)
@@ -192,15 +192,15 @@ def run_level1():
 
 # ----------------------------- transformer with dynamic padding -----------------------------
 def run_transformer(model_name, train_texts, test_texts, tag, n_seeds=1, bs=32, ep=None):
-    """n_seeds>1: প্রতি ফোল্ডে ভিন্ন random seed দিয়ে n_seeds বার ট্রেইন করে probability
-    গড় করে (bagging) — ছোট ডেটায় transformer fine-tuning-এর variance কমানোর
-    সবচেয়ে প্রমাণিত কৌশল। bs = per-model batch size (বড় vocab-এর মডেলে কমাতে হয়)।"""
+    """n_seeds > 1: train n_seeds times per fold with different random seeds and average
+    the probabilities (bagging) -- the most proven way to cut transformer fine-tuning
+    variance on small data. bs = per-model batch size (lower it for large-vocab models)."""
     BS_ = int(bs)
     epochs = 1 if FAST_DEV_RUN else int(ep if ep is not None else EPOCHS)
     safe = re.sub(r'[^a-zA-Z0-9]+', '_', tag).strip('_').lower()
-    # cache key-তে epoch ও seed থাকে — নাহলে কম epoch-এ ট্রেইন করা পুরনো (underfit)
-    # ফাইল ভুল করে লোড হয়ে যেত। পুরনো নামের ফাইল শুধু তখনই ব্যবহার্য যখন
-    # epoch/seed ডিফল্টের সমান (অর্থাৎ ওই ফাইলগুলোর সাথে মিলে যায়)।
+    # The cache key includes the epoch and seed count -- otherwise an older (underfit)
+    # file trained with fewer epochs would be loaded by mistake. Legacy filenames are
+    # only usable when their epoch/seed settings match the current defaults.
     key = f'{safe}_e{epochs}x{int(n_seeds)}'
     cands = [key] + ([safe] if (epochs == EPOCHS and int(n_seeds) == 2) else [])
     for _k in cands:
@@ -208,11 +208,11 @@ def run_transformer(model_name, train_texts, test_texts, tag, n_seeds=1, bs=32, 
         if os.path.exists(c_o) and os.path.exists(c_t):
             _o, _t = np.load(c_o), np.load(c_t)
             if _o.shape == (len(y), N_CLASSES) and _t.shape == (len(Tte), N_CLASSES):
-                print(f'[{tag}] CACHE পাওয়া গেছে ({_k}) -> retrain ছাড়াই লোড হলো '
+                print(f'[{tag}] CACHE found ({_k}) -> loaded without retraining '
                       f'(solo OOF={f1p(_o, mask=COVERED):.4f})', flush=True)
                 return _o, _t
-            print(f'[{tag}] {_k} cache-এর shape মেলেনি -> বাদ', flush=True)
-    print(f'[{tag}] cache নেই -> ট্রেইন শুরু ({epochs} epoch × {n_seeds} seed)', flush=True)
+            print(f'[{tag}] {_k} cache shape mismatch -> skipped', flush=True)
+    print(f'[{tag}] no cache -> starting training ({epochs} epochs x {n_seeds} seeds)', flush=True)
 
     import torch
     import torch.nn.functional as F
@@ -224,7 +224,7 @@ def run_transformer(model_name, train_texts, test_texts, tag, n_seeds=1, bs=32, 
     use_amp = (dev == 'cuda')
     print(f'[{tag}] device={dev} maxlen={MAXLEN} dynamic-pad=on smooth={LABEL_SMOOTH}')
     if dev == 'cpu':
-        print(f'[{tag}] !! GPU নেই — Settings > Accelerator > GPU T4 দাও, নাহলে এটা চালিয়ো না')
+        print(f'[{tag}] !! no GPU -- set Settings > Accelerator > GPU T4, do not run this otherwise')
 
     tok = AutoTokenizer.from_pretrained(model_name)
 
@@ -260,9 +260,9 @@ def run_transformer(model_name, train_texts, test_texts, tag, n_seeds=1, bs=32, 
 
     @torch.no_grad()
     def predict(model, ds):
-        """Length-sorted batching (দ্রুত), কিন্তু prediction মূল index-এ ফেরত বসানো হয়।
-        v3-এর প্রথম ভার্সনে এখানেই বাগ ছিল: sorted order-এ ফেরত দিত, তাই oof[vai]
-        এলোমেলো হয়ে যেত (OOF macroF1 ০.২৪ আসছিল)।"""
+        """Length-sorted batching (faster), but predictions are written back to the original
+        indices. The first v3 build returned them in sorted order, which scrambled oof[vai]
+        and produced an OOF macro-F1 of 0.24."""
         model.eval()
         n = len(ds)
         out = np.zeros((n, N_CLASSES), dtype=np.float32)
@@ -272,7 +272,7 @@ def run_transformer(model_name, train_texts, test_texts, tag, n_seeds=1, bs=32, 
             with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp):
                 logits = model(**b).logits
             out[np.asarray(idx)] = torch.softmax(logits.float(), -1).cpu().numpy()
-        assert out.sum(1).min() > 0.5, 'predict: কিছু row ভরা হয়নি'
+        assert out.sum(1).min() > 0.5, 'predict: some rows were left unfilled'
         return out
 
     ds_test = DS(test_texts)
@@ -290,15 +290,15 @@ def run_transformer(model_name, train_texts, test_texts, tag, n_seeds=1, bs=32, 
             torch.manual_seed(seed)
             model = AutoModelForSequenceClassification.from_pretrained(
                 model_name, num_labels=N_CLASSES).to(dev)
-            # mDeBERTa-v3-এর checkpoint-এ কিছু ওজন fp16 হিসেবে সেভ করা থাকে।
-            # তখন AMP scaler.unscale_() ক্র্যাশ করে: "Attempting to unscale FP16 gradients"।
-            # সব param fp32-এ কাস্ট করলে সমস্যা যায় (fp16 AMP এখনো চালু থাকে)।
+            # Some mDeBERTa-v3 checkpoint weights are stored as fp16. In that case the AMP
+            # scaler.unscale_() call crashes: "Attempting to unscale FP16 gradients".
+            # Casting every parameter to fp32 fixes it while fp16 AMP stays enabled.
             n_fp16 = sum(1 for p in model.parameters() if p.dtype != torch.float32)
             if n_fp16:
                 for p in model.parameters():
                     if p.dtype != torch.float32:
                         p.data = p.data.float()
-                print(f'  [{tag}] {n_fp16}টি tensor fp16 ছিল -> fp32-এ কাস্ট করা হলো', flush=True)
+                print(f'  [{tag}] {n_fp16} tensors were fp16 -> cast to fp32', flush=True)
             ds_tr = ds_tr_base
             rng = np.random.RandomState(seed)
 
@@ -371,7 +371,7 @@ def run_level2(L1_oof, L1_test, deep):
     Xt = np.concatenate([L1_test] + [nrm(t) for _, t in deep], axis=1)
     print(f'\nLevel-2 meta-features: {X.shape[1]}')
 
-    # শুধু COVERED row-এ ট্রেইন/স্কোর (full ৫-ফোল্ডে COVERED = সব row)
+    # train/score on COVERED rows only (with all 5 folds, COVERED = every row)
     rows = np.where(COVERED)[0]
     Xc, yc = X[rows], y[rows]
     print(f'Level-2 uses {len(rows)}/{len(y)} rows with valid OOF')
@@ -409,17 +409,17 @@ def run_level2(L1_oof, L1_test, deep):
     Lt_meta = w * Lg(te_gb) + (1 - w) * Lg(te_lr) if HAS_LGB else Lg(te_lr)
 
     # ----------------------------- Alt: direct weighted log-prob blend -----------------------------
-    # meta-stacker কে অতিক্রম করার আরেকটা পথ — সরাসরি component গুলোর ভেতরে
-    # (stacker + প্রতিটি transformer) ওজন খোঁজা। আগে local experiment-এ এটা ভালো দিয়েছিল।
-    # দুটোর মধ্যে যেটা OOF-এ ভালো, সেটাই ব্যবহার করি (margin 0.001 রাখা হয় overfit এড়াতে)।
+    # Another route that bypasses the meta-stacker: search weights directly over the
+    # components (stacker + each transformer). It scored better in an earlier local run.
+    # We take whichever is better on OOF, with a 0.001 margin to avoid overfitting.
     def softmax(P):
         Z = np.exp(P - P.max(1, keepdims=True)); return Z / Z.sum(1, keepdims=True)
 
-    # component = meta-stacker-এর output + প্রতিটি transformer track (আলাদা করে)
+    # component = meta-stacker output + each transformer track (separately)
     comps_oof = [Lg(softmax(L_meta))] + [Lg(o) for o, _ in deep]
     comps_te = [Lg(softmax(Lt_meta))] + [Lg(t) for _, t in deep]
 
-    # greedy forward selection with replacement (Caruana-style), OOF-এ স্কোর দিয়ে
+    # greedy forward selection with replacement (Caruana-style), scored on OOF
     n_models = len(comps_oof)
     counts = np.zeros(n_models)
     cur = np.zeros_like(comps_oof[0])
@@ -446,9 +446,9 @@ def run_level2(L1_oof, L1_test, deep):
           f'greedy-blend OOF={f1p(L_greedy, mask=COVERED):.4f}')
 
     if f1p(L_greedy, mask=COVERED) > f1p(L_meta, mask=COVERED) + 0.001:
-        print('  -> greedy blend বেছে নেওয়া হলো')
+        print('  -> greedy blend chosen')
         return L_greedy, Lt_greedy
-    print('  -> meta blend বেছে নেওয়া হলো')
+    print('  -> meta blend chosen')
     return L_meta, Lt_meta
 
 def tune_bias(L, rounds=8):
@@ -475,14 +475,14 @@ if __name__ == '__main__':
     if os.path.exists('oof_level1.npy') and os.path.exists('test_level1.npy'):
         L1_oof = np.load('oof_level1.npy'); L1_test = np.load('test_level1.npy')
         if L1_oof.shape[0] == len(y) and L1_test.shape[0] == len(Tte):
-            COVERED[:] = True   # cache থেকে লোড হলে run_level1 আর COVERED সেট করে না
-            print(f'  [CACHE] Level-1 লোড হলো ({L1_oof.shape[1]} col) — আবার ফিট হচ্ছে না')
+            COVERED[:] = True   # loaded from cache, so run_level1 no longer sets COVERED
+            print(f'  [CACHE] Level-1 loaded ({L1_oof.shape[1]} cols) -- not refitting')
         else:
             L1_oof, L1_test = run_level1()
             np.save('oof_level1.npy', L1_oof); np.save('test_level1.npy', L1_test)
     else:
         L1_oof, L1_test = run_level1()
-        # মাঝপথে session মরে গেলেও যাতে Level-1 কাজ নষ্ট না হয়
+        # so that a mid-run session death does not destroy the Level-1 work
         np.save('oof_level1.npy', L1_oof); np.save('test_level1.npy', L1_test)
         print('  saved oof_level1.npy / test_level1.npy')
     print(f'  COVERED rows = {COVERED.sum()}/{len(y)}')
@@ -493,7 +493,7 @@ if __name__ == '__main__':
         deep.append(run_transformer('csebuetnlp/banglishbert', Ttr, Tte, 'banglishbert',
                                     n_seeds=1 if FAST_DEV_RUN else BB_SEEDS, bs=BS, ep=EPOCHS))
     else:
-        print('\n[SKIP] BanglishBERT — v4/v5-এ blend weight ছিল 0.00')
+        print('\n[SKIP] BanglishBERT -- its blend weight was 0.00 in v4/v5')
 
     if RUN_BANGLABERT_TRACK:
         print(f'\n=== Deep 1/3: BanglaBERT (transliterated), {BN_SEEDS}-seed, {BN_EPOCHS}ep ===')

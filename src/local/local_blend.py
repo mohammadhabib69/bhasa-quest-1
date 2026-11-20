@@ -1,13 +1,13 @@
 """
-Local blender for BhasaQuest-1 — Kaggle GPU ছাড়াই সব candidate মাপা যায়।
+Local blender for BhasaQuest-1 -- measure every candidate without a Kaggle GPU.
 
-কী করে:
-  1) যতগুলো probability track পাওয়া যায় সব লোড করে (level1 / banglabert seeds / muril /
-     mdeberta / নতুন bn_s2,s3,s4 / test_bn_full)।
-  2) প্রতি configuration-এর জন্য nested-CV meta-stacker চালায় -> honest OOF।
-  3) শুধু OOF-এ সত্যিকারের লাভ হলে submission লেখে (নাহলে কিছুই লেখে না)।
+What it does:
+  1) Loads every probability track it can find (level1 / banglabert seeds / muril /
+     mdeberta / new bn_s2,s3,s4 / test_bn_full).
+  2) Runs a nested-CV meta-stacker per configuration -> honest OOF.
+  3) Writes a submission only if OOF improves for real (otherwise it writes nothing).
 
-চালাও:  ./.venv/bin/python final_blend.py
+Run:  python src/local/local_blend.py --data <dir with csv + npy> --out <dir>
 """
 import os, glob, argparse
 import numpy as np
@@ -41,7 +41,7 @@ def load(name, n):
         return None
     A = np.load(f)
     if A.shape[0] != n:
-        print(f'  !! {f} shape {A.shape} মেলেনি -> বাদ')
+        print(f'  !! {f} shape {A.shape} does not match -> skipped')
         return None
     return nrm(A)
 
@@ -54,7 +54,7 @@ def f1p(P):
 print('=== tracks ===')
 L1_o, L1_t = load('oof_level1', len(y)), load('test_level1', len(te))
 if L1_o is None:
-    raise SystemExit('oof_level1.npy নেই — এটা ছাড়া কিছুই করা যাবে না')
+    raise SystemExit('oof_level1.npy is missing -- nothing can be done without it')
 
 bn_seed_names = [k for k in ['oof_banglabert_e5x2', 'oof_bn_s2', 'oof_bn_s3', 'oof_bn_s4']
                  if os.path.exists(os.path.join(DATA, f'{k}.npy'))]
@@ -74,13 +74,13 @@ MD_o, MD_t = load('oof_mdeberta_e6x2', len(y)), load('test_mdeberta_e6x2', len(t
 if MU_o is None:
     MU_o, MU_t = load('oof_muril', len(y)), load('test_muril', len(te))
 if MD_o is None:
-    print('  !! mdeberta track নেই — বাদ')
+    print('  !! mdeberta track missing -- skipped')
 print(f'  muril    solo={f1p(MU_o):.4f}' if MU_o is not None else '  muril: none')
 print(f'  mdeberta solo={f1p(MD_o):.4f}' if MD_o is not None else '  mdeberta: none')
 
 FULL_t = load('test_bn_full', len(te))
 if FULL_t is not None:
-    print('  test_bn_full পাওয়া গেছে -> test-এ BN column 70/30 blend হবে')
+    print('  test_bn_full found -> BN column will be blended 70/30 on test')
 
 
 # ----------------------------- meta stacker -----------------------------
@@ -108,7 +108,7 @@ print(f'  A) baseline (bn={len(bn_o_list)} seeds)         OOF={f1p(oof_a):.4f}')
 
 results = {'A_baseline': (f1p(oof_a), te_a)}
 
-# full-data model test blend (OOF অপরিবর্তিত, শুধু test column পাল্টায়)
+# full-data model test blend (OOF unchanged, only the test column changes)
 if FULL_t is not None:
     BN_t_mix = nrm(0.7 * BN_t + 0.3 * FULL_t)
     t_b = [L1_t, BN_t_mix] + ([MU_t] if MU_o is not None else []) + \
@@ -135,11 +135,11 @@ def write(sub_name, prob, note=''):
 
 
 if best_name == 'A_baseline':
-    print(f'\n-> নতুন candidate লিখছি না (baseline-ই সেরা; লাভ < {GAIN_THRESHOLD})')
-    print('   নিরাপদ: আগের 0.76023 submission-টাই selected রাখো।')
+    print(f'\n-> not writing a new candidate (baseline is best; gain < {GAIN_THRESHOLD})')
+    print('   Safe: keep the existing 0.76023 submission selected.')
 else:
     write('submission_push.csv', best_te, '(full-data blend)')
-    print('   submit করার আগে দেখো: দামি slot, তাই শুধু একবার।')
+    print('   Before submitting: this costs a real slot, so only once.')
 
 print('\n=== per-class (baseline) ===')
 print(classification_report(y, oof_a.argmax(1), target_names=classes, digits=3))

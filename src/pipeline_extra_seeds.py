@@ -1,21 +1,21 @@
 """
 BhasaQuest-1 — FINAL PUSH: BanglaBERT extra seeds + full-data model
 
-কেন শুধু এই দুটো:
-  এখন পর্যন্ত সব লিভার মেপে দেখা হয়েছে (TF-IDF view, pseudo-label, trio specialist,
-  bias tune, per-class weight, rank-avg, LLM) — কোনোটাই real gain দেয়নি।
-  বাকি আছে শুধু variance কমানো: BanglaBERT-ই একমাত্র শক্তিশালী transformer
-  (solo OOF 0.7227)। আগের রানে ছিল ২টা seed। ৩টা নতুন seed যোগ করলে
-  seed-noise কমবে — এটাই ছোট ডেটায় সবচেয়ে প্রমাণিত লাভ।
+Why only these two runs:
+  every other lever has already been measured (TF-IDF views, pseudo-labelling, trio
+  specialist, bias tuning, per-class weights, rank averaging, an LLM) and none produced a
+  real gain. What is left is variance reduction: BanglaBERT is the only strong transformer
+  (solo OOF 0.7227) and the previous run used only 2 seeds. Three more seeds cut
+  seed noise -- the most proven gain available on small data.
 
-আউটপুট (আগের ফাইলগুলো ছোঁয়া হয় না):
-  oof_bn_s2.npy / test_bn_s2.npy      -> নতুন seed (per fold seed = 42 + f*100 + 2)
+Outputs (existing files are never touched):
+  oof_bn_s2.npy / test_bn_s2.npy      -> new seed (per-fold seed = 42 + f*100 + 2)
   oof_bn_s3.npy / test_bn_s3.npy      -> seed s=3
   oof_bn_s4.npy / test_bn_s4.npy      -> seed s=4
-  test_bn_full.npy                    -> 100% train data-তে ট্রেইন করা মডেল (OOF নেই)
+  test_bn_full.npy                    -> model trained on 100% of train (no OOF)
 
-কাগল সেটিং: GPU T4 x1 (বা x2), Internet ON, ~২ ঘণ্টা।
-রান শেষে এই ৭টা ফাইল ডাউনলোড করে আমাকে দাও।
+Kaggle settings: GPU T4 x1 (or x2), Internet ON, about 2 hours.
+When the run finishes, download these 7 files and hand them over.
 """
 import os, re, glob, math, time
 
@@ -24,9 +24,9 @@ import numpy as np
 import pandas as pd
 
 # ----------------------------- toggles -----------------------------
-RUN_EXTRA_SEEDS = True      # 3টা নতুন seed  (≈৭০-৯০ মিনিট)
-RUN_FULL_DATA   = True      # 100% data মডেল (≈১৫ মিনিট)
-SEEDS_TO_RUN    = [2, 3, 4] # 0,1 আগেই হয়েছে (oof_banglabert_e5x2.npy)
+RUN_EXTRA_SEEDS = True      # 3 new seeds      (~70-90 min)
+RUN_FULL_DATA   = True      # 100% data model  (~15 min)
+SEEDS_TO_RUN    = [2, 3, 4] # 0 and 1 already exist (oof_banglabert_e5x2.npy)
 FULL_SEEDS      = 2
 
 MODEL_NAME = 'csebuetnlp/banglabert'
@@ -57,7 +57,7 @@ print(f'train={len(train)} test={len(test)} classes={classes}', flush=True)
 
 from sklearn.model_selection import StratifiedKFold
 FOLDS = list(StratifiedKFold(NSPLIT, shuffle=True, random_state=SEED).split(Ttr, y))
-print(f'folds={len(FOLDS)} (v7-এর হুবহু একই split, random_state={SEED})', flush=True)
+print(f'folds={len(FOLDS)} (exactly the v7 split, random_state={SEED})', flush=True)
 
 # ----------------------------- transliteration -----------------------------
 for _pkg, _mod in [('sentencepiece', 'sentencepiece')]:
@@ -102,7 +102,7 @@ if dev == 'cuda':
     print(f'  gpu={torch.cuda.get_device_name(0)} '
           f'mem={torch.cuda.get_device_properties(0).total_memory/1e9:.1f}GB', flush=True)
 else:
-    raise SystemExit('!! GPU নেই — Settings > Accelerator > GPU T4 দাও, নাহলে এটা চালিয়ো না')
+    raise SystemExit('!! no GPU -- set Settings > Accelerator > GPU T4, do not run this otherwise')
 
 tok = AutoTokenizer.from_pretrained(MODEL_NAME)
 print(f'tokenizer ok (vocab={tok.vocab_size})', flush=True)
@@ -148,7 +148,7 @@ def predict(model, ds):
         with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp):
             logits = model(**b).logits
         out[np.asarray(idx)] = torch.softmax(logits.float(), -1).cpu().numpy()
-    assert out.sum(1).min() > 0.5, 'predict: কিছু row ভরা হয়নি'
+    assert out.sum(1).min() > 0.5, 'predict: some rows were left unfilled'
     return out
 
 ds_test = DS(Tte_bn)
@@ -196,7 +196,7 @@ if RUN_EXTRA_SEEDS:
         c_o, c_t = f'oof_bn_s{s}.npy', f'test_bn_s{s}.npy'
         if os.path.exists(c_o) and os.path.exists(c_t):
             o = np.load(c_o)
-            print(f'  [s={s}] cache আছে (solo OOF={f1_score(y, o.argmax(1), average="macro"):.4f}) -> skip', flush=True)
+            print(f'  [s={s}] cache exists (solo OOF={f1_score(y, o.argmax(1), average="macro"):.4f}) -> skip', flush=True)
             continue
         t_start = time.time()
         oof = np.zeros((len(y), N_CLASSES), dtype=np.float32)
@@ -239,7 +239,7 @@ if RUN_EXTRA_SEEDS:
 if RUN_FULL_DATA:
     print(f'\n=== BanglaBERT FULL DATA ({len(Ttr)} rows), {FULL_SEEDS} seeds @ {BN_EPOCHS}ep ===', flush=True)
     if os.path.exists('test_bn_full.npy'):
-        print('  cache আছে -> skip', flush=True)
+        print('  cache exists -> skip', flush=True)
     else:
         ds_all = DS(Ttr_bn, y)
         t_start = time.time()
@@ -262,7 +262,7 @@ if RUN_FULL_DATA:
         np.save('test_bn_full.npy', tp)
         print('  saved test_bn_full.npy', flush=True)
 
-print('\n=== DONE — এই ফাইলগুলো ডাউনলোড করো ===', flush=True)
+print('\n=== DONE -- download these files ===', flush=True)
 for f in sorted(glob.glob('oof_bn_s*.npy') + glob.glob('test_bn_s*.npy') + glob.glob('test_bn_full.npy')):
     print('  ', f, np.load(f).shape, flush=True)
 print(f'total {(time.time()-T_ALL)/60:.1f} min', flush=True)

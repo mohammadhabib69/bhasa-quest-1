@@ -99,7 +99,6 @@ multi-seed probability averaging.
 ├── src/
 │   ├── pipeline_main.py            # full two-level hybrid stacking pipeline (Kaggle)
 │   ├── pipeline_extra_seeds.py     # extra BanglaBERT seeds + full-data model
-│   ├── pipeline_v6_reference.py    # earlier revision, kept for the ablation trail
 │   └── local/
 │       ├── local_blend.py          # CPU-only blender over saved OOF matrices
 │       └── make_figures.py         # regenerates every figure in report/figures
@@ -121,6 +120,10 @@ multi-seed probability averaging.
 
 The competition data is **not** included (Kaggle terms). Download `train.csv`, `test.csv` and
 `sample_submission.csv` from the competition **Data** page, then:
+
+> Individual texts are not reproduced anywhere in this repository. The corpus contains user
+> requests for harmful actions, which appear only as classification targets; the notebook reports
+> aggregate statistics instead of printing rows.
 
 ```bash
 pip install -r requirements.txt
